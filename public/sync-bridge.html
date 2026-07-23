@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>See and Play Sync Bridge</title>
+</head>
+<body>
+  <div style="font-family: sans-serif; color: #666; text-align: center; padding: 20px;">
+    Sync Bridge Active
+  </div>
+  <script>
+    const DB_NAME = 'see-and-play-db';
+    const DB_VERSION = 1;
+
+    function getDB() {
+      return new Promise((resolve, reject) => {
+        const request = indexedDB.open(DB_NAME, DB_VERSION);
+        request.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('toys')) {
+            db.createObjectStore('toys', { keyPath: 'id' });
+          }
+          if (!db.objectStoreNames.contains('classifier')) {
+            db.createObjectStore('classifier');
+          }
+        };
+        request.onsuccess = (e) => resolve(e.target.result);
+        request.onerror = (e) => reject(e.target.error);
+      });
+    }
+
+    async function getAllData() {
+      const db = await getDB();
+      return new Promise((resolve, reject) => {
+        const transaction = db.transaction(['toys', 'classifier'], 'readonly');
+        const toysStore = transaction.objectStore('toys');
+        const classifierStore = transaction.objectStore('classifier');
+        
+        let toys = [];
+        let datasetJson = null;
+
+        const toysReq = toysStore.getAll();
+        toysReq.onsuccess = (e) => {
+          toys = e.target.result;
+        };
+
+        const classifierReq = classifierStore.get('dataset');
+        classifierReq.onsuccess = (e) => {
+          datasetJson = e.target.result;
+        };
+
+        transaction.oncomplete = () => {
+          resolve({ toys, datasetJson });
+        };
+
+        transaction.onerror = (e) => {
+          reject(e.target.error);
+        };
+      });
+    }
+
+    // Listen for requests from the local app
+    window.addEventListener('message', async (event) => {
+      const origin = event.origin;
+
+      // Security Check: Only allow localhost or private local network IPs
+      const isLocalOrigin = 
+        origin.startsWith('http://localhost') || 
+        origin.startsWith('http://127.0.0.1') || 
+        /^http:\/\/(10|172\.(1[6-9]|2[0-9]|3[01])|192\.168)\.\d+\.\d+(:\d+)?$/.test(origin);
+
+      if (!isLocalOrigin) {
+        console.warn('Sync bridge blocked unauthorized origin:', origin);
+        return;
+      }
+
+      if (event.data && event.data.type === 'REQUEST_SYNC_DATA') {
+        try {
+          const syncData = await getAllData();
+          event.source.postMessage({
+            type: 'SYNC_DATA_RESPONSE',
+            data: syncData
+          }, origin);
+        } catch (err) {
+          event.source.postMessage({
+            type: 'SYNC_DATA_ERROR',
+            error: err.message
+          }, origin);
+        }
+      }
+    });
+  </script>
+</body>
+</html>
