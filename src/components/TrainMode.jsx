@@ -3,7 +3,7 @@ import { Camera, Trash2, Plus, Save, RotateCw, ArrowLeft, Image, Video, Sparkles
 import { saveToy, getAllToys, deleteToy, syncToysWithViteServer } from '../utils/db';
 import { addExample, saveClassifier, clearClass, initClassifier } from '../utils/classifier';
 
-const BUILT_IN_VIDEOS = [
+const DEFAULT_BUILT_IN_VIDEOS = [
   { id: 'cow', label: 'Cow 🐄', path: 'videos/cow.mp4', defaultName: 'Cow' },
   { id: 'lion', label: 'Lion 🦁', path: 'videos/lion.mp4', defaultName: 'Lion' },
   { id: 'elephant', label: 'Elephant 🐘', path: 'videos/elephant.mp4', defaultName: 'Elephant' },
@@ -18,10 +18,12 @@ const BUILT_IN_VIDEOS = [
 export default function TrainMode({ onBack }) {
   const [toys, setToys] = useState([]);
   
+  const [builtInVideos, setBuiltInVideos] = useState(DEFAULT_BUILT_IN_VIDEOS);
+  
   // Creation States
   const [toyName, setToyName] = useState('Cow');
   const [sourceType, setSourceType] = useState('builtin'); // 'builtin' | 'upload'
-  const [selectedBuiltInPath, setSelectedBuiltInPath] = useState(BUILT_IN_VIDEOS[0].path);
+  const [selectedBuiltInPath, setSelectedBuiltInPath] = useState(DEFAULT_BUILT_IN_VIDEOS[0].path);
   
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaType, setMediaType] = useState('image'); // 'image' | 'video'
@@ -42,6 +44,24 @@ export default function TrainMode({ onBack }) {
     loadToys();
     initClassifier().then(() => setIsLoadingModel(false));
 
+    const fetchCatalog = async () => {
+      try {
+        const base = import.meta.env.BASE_URL || '/';
+        const response = await fetch(`${base}videos-list.json`);
+        if (response.ok) {
+          const catalog = await response.json();
+          if (catalog && catalog.length > 0) {
+            setBuiltInVideos(catalog);
+            setSelectedBuiltInPath(catalog[0].path);
+            setToyName(catalog[0].defaultName);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to fetch videos-list.json, using defaults.", err);
+      }
+    };
+    fetchCatalog();
+
     return () => {
       stopCamera();
       if (trainingIntervalRef.current) clearInterval(trainingIntervalRef.current);
@@ -51,12 +71,12 @@ export default function TrainMode({ onBack }) {
   // Update default name when built-in path changes
   useEffect(() => {
     if (sourceType === 'builtin') {
-      const match = BUILT_IN_VIDEOS.find(v => v.path === selectedBuiltInPath);
+      const match = builtInVideos.find(v => v.path === selectedBuiltInPath);
       if (match) {
         setToyName(match.defaultName);
       }
     }
-  }, [selectedBuiltInPath, sourceType]);
+  }, [selectedBuiltInPath, sourceType, builtInVideos]);
 
   useEffect(() => {
     if (cameraActive) {
@@ -197,9 +217,9 @@ export default function TrainMode({ onBack }) {
       }
 
       // Reset form
-      setToyName('Cow');
+      setToyName(builtInVideos[0]?.defaultName || 'Cow');
       setSourceType('builtin');
-      setSelectedBuiltInPath(BUILT_IN_VIDEOS[0].path);
+      setSelectedBuiltInPath(builtInVideos[0]?.path || DEFAULT_BUILT_IN_VIDEOS[0].path);
       setMediaFile(null);
       setMediaPreview(null);
       setCurrentToyId(null);
@@ -262,7 +282,7 @@ export default function TrainMode({ onBack }) {
                   className={`control-btn ${sourceType === 'builtin' ? 'active' : ''}`}
                   onClick={() => {
                     setSourceType('builtin');
-                    const match = BUILT_IN_VIDEOS.find(v => v.path === selectedBuiltInPath);
+                    const match = builtInVideos.find(v => v.path === selectedBuiltInPath);
                     if (match) setToyName(match.defaultName);
                   }}
                 >
@@ -302,7 +322,7 @@ export default function TrainMode({ onBack }) {
                       onChange={(e) => setSelectedBuiltInPath(e.target.value)}
                       className="toy-select"
                     >
-                      {BUILT_IN_VIDEOS.map(v => (
+                      {builtInVideos.map(v => (
                         <option key={v.id} value={v.path}>{v.label}</option>
                       ))}
                     </select>

@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "vite",
-    "build": "vite build",
+    "dev": "node scripts/generate-videos-catalog.js && vite",
+    "build": "node scripts/generate-videos-catalog.js && vite build",
     "lint": "oxlint",
     "preview": "vite preview",
     "predeploy": "npm run build",
