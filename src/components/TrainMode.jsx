@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Trash2, Plus, Save, RotateCw, ArrowLeft, Image, Video, Sparkles, CheckCircle } from 'lucide-react';
+import { Camera, Trash2, Plus, RotateCw, ArrowLeft, Image, Video, Sparkles, CheckCircle, Search, Mic, Wand2 } from 'lucide-react';
 import { saveToy, getAllToys, deleteToy, syncToysWithViteServer } from '../utils/db';
-import { addExample, saveClassifier, clearClass, initClassifier } from '../utils/classifier';
+import { addExample, saveClassifier, clearClass, initClassifier, classifyZeroShot } from '../utils/classifier';
+import { startVoiceListener, matchSpeechToVideo, isSpeechSupported } from '../utils/speech';
 
 const DEFAULT_BUILT_IN_VIDEOS = [
   { id: 'cow', label: 'Cow 🐄', path: 'videos/cow.mp4', defaultName: 'Cow' },
@@ -17,13 +18,14 @@ const DEFAULT_BUILT_IN_VIDEOS = [
 
 export default function TrainMode({ onBack }) {
   const [toys, setToys] = useState([]);
-  
   const [builtInVideos, setBuiltInVideos] = useState(DEFAULT_BUILT_IN_VIDEOS);
   
   // Creation States
   const [toyName, setToyName] = useState('Cow');
   const [sourceType, setSourceType] = useState('builtin'); // 'builtin' | 'upload'
+  const [trainingMethod, setTrainingMethod] = useState('video'); // 'video' | 'photo'
   const [selectedBuiltInPath, setSelectedBuiltInPath] = useState(DEFAULT_BUILT_IN_VIDEOS[0].path);
+  const [videoSearchQuery, setVideoSearchQuery] = useState('');
   
   const [mediaFile, setMediaFile] = useState(null);
   const [mediaType, setMediaType] = useState('image'); // 'image' | 'video'
@@ -35,10 +37,13 @@ export default function TrainMode({ onBack }) {
   const [isTraining, setIsTraining] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [isLoadingModel, setIsLoadingModel] = useState(true);
+  const [autoDetectBadge, setAutoDetectBadge] = useState(null);
+  const [isVoiceSearching, setIsVoiceSearching] = useState(false);
 
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const trainingIntervalRef = useRef(null);
+  const voiceListenerRef = useRef(null);
 
   useEffect(() => {
     loadToys();
@@ -65,18 +70,9 @@ export default function TrainMode({ onBack }) {
     return () => {
       stopCamera();
       if (trainingIntervalRef.current) clearInterval(trainingIntervalRef.current);
+      if (voiceListenerRef.current) voiceListenerRef.current.stop();
     };
   }, []);
-
-  // Update default name when built-in path changes
-  useEffect(() => {
-    if (sourceType === 'builtin') {
-      const match = builtInVideos.find(v => v.path === selectedBuiltInPath);
-      if (match) {
-        setToyName(match.defaultName);
-      }
-    }
-  }, [selectedBuiltInPath, sourceType, builtInVideos]);
 
   useEffect(() => {
     if (cameraActive) {
@@ -151,6 +147,34 @@ export default function TrainMode({ onBack }) {
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
   };
 
+  // Zero-Shot AI Auto-Detection of Toy Animal
+  const handleAutoDetectAnimal = async () => {
+    if (!videoRef.current) return;
+    try {
+      const predictions = await classifyZeroShot(videoRef.current);
+      if (predictions && predictions.length > 0) {
+        const top = predictions[0];
+        console.log("Zero-shot raw prediction:", top);
+        
+        const matchedVideo = matchSpeechToVideo(top.className, builtInVideos);
+        if (matchedVideo) {
+          setSelectedBuiltInPath(matchedVideo.path);
+          setToyName(matchedVideo.defaultName);
+          setAutoDetectBadge(`✨ AI Auto-Detected: ${matchedVideo.label}`);
+          setTimeout(() => setAutoDetectBadge(null), 4000);
+        } else {
+          // Format raw name nicely
+          const cleanName = top.className.split(',')[0];
+          setToyName(cleanName.charAt(0).toUpperCase() + cleanName.slice(1));
+          setAutoDetectBadge(`✨ Recognized: ${cleanName}`);
+          setTimeout(() => setAutoDetectBadge(null), 4000);
+        }
+      }
+    } catch (err) {
+      console.error("Auto detect failed:", err);
+    }
+  };
+
   const startTrainingLoop = () => {
     if (isTraining || !videoRef.current || !currentToyId) return;
     setIsTraining(true);
@@ -179,6 +203,88 @@ export default function TrainMode({ onBack }) {
     if (trainingIntervalRef.current) {
       clearInterval(trainingIntervalRef.current);
       trainingIntervalRef.current = null;
+    }
+  };
+
+  // Train via Single Photo (Generates 30 Augmented Canvas Variations)
+  const handleTrainFromSinglePhoto = async () => {
+    if (!videoRef.current || !currentToyId) return;
+    setIsTraining(true);
+
+    try {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = 224;
+      canvas.height = 224;
+
+      const augmentations = [
+        { rotate: 0, scale: 1.0, tx: 0, ty: 0 },
+        { rotate: -5, scale: 1.0, tx: 0, ty: 0 },
+        { rotate: 5, scale: 1.0, tx: 0, ty: 0 },
+        { rotate: -10, scale: 0.95, tx: -5, ty: -5 },
+        { rotate: 10, scale: 0.95, tx: 5, ty: 5 },
+        { rotate: 0, scale: 1.1, tx: 0, ty: 0 },
+        { rotate: 0, scale: 0.9, tx: 0, ty: 0 },
+        { rotate: -15, scale: 1.05, tx: 5, ty: -5 },
+        { rotate: 15, scale: 1.05, tx: -5, ty: 5 },
+        { rotate: 0, scale: 1.0, tx: 10, ty: 0 },
+        { rotate: 0, scale: 1.0, tx: -10, ty: 0 },
+        { rotate: 0, scale: 1.0, tx: 0, ty: 10 },
+        { rotate: 0, scale: 1.0, tx: 0, ty: -10 },
+        { rotate: -8, scale: 1.08, tx: -3, ty: 3 },
+        { rotate: 8, scale: 1.08, tx: 3, ty: -3 },
+        { rotate: -12, scale: 0.92, tx: 4, ty: -4 },
+        { rotate: 12, scale: 0.92, tx: -4, ty: 4 },
+        { rotate: -3, scale: 1.12, tx: -2, ty: -2 },
+        { rotate: 3, scale: 1.12, tx: 2, ty: 2 },
+        { rotate: 0, scale: 0.85, tx: 0, ty: 0 },
+        { rotate: 0, scale: 1.15, tx: 0, ty: 0 },
+        { rotate: -6, scale: 1.0, tx: 8, ty: -8 },
+        { rotate: 6, scale: 1.0, tx: -8, ty: 8 },
+        { rotate: -14, scale: 1.02, tx: -6, ty: 6 },
+        { rotate: 14, scale: 1.02, tx: 6, ty: -6 }
+      ];
+
+      for (let i = 0; i < augmentations.length; i++) {
+        const aug = augmentations[i];
+        ctx.clearRect(0, 0, 224, 224);
+        ctx.save();
+        ctx.translate(112 + aug.tx, 112 + aug.ty);
+        ctx.rotate((aug.rotate * Math.PI) / 180);
+        ctx.scale(aug.scale, aug.scale);
+        ctx.drawImage(videoRef.current, -112, -112, 224, 224);
+        ctx.restore();
+
+        await addExample(currentToyId, canvas);
+        setSamplesCount(i + 1);
+      }
+    } catch (err) {
+      console.error("Single photo training error:", err);
+    } finally {
+      setIsTraining(false);
+    }
+  };
+
+  const handleToggleVoiceSearch = () => {
+    if (isVoiceSearching) {
+      if (voiceListenerRef.current) voiceListenerRef.current.stop();
+      setIsVoiceSearching(false);
+    } else {
+      setIsVoiceSearching(true);
+      voiceListenerRef.current = startVoiceListener({
+        onResult: (transcript) => {
+          setVideoSearchQuery(transcript);
+          const matched = matchSpeechToVideo(transcript, builtInVideos);
+          if (matched) {
+            setSelectedBuiltInPath(matched.path);
+            setToyName(matched.defaultName);
+          }
+          setIsVoiceSearching(false);
+        },
+        onError: () => setIsVoiceSearching(false),
+        onEnd: () => setIsVoiceSearching(false),
+        continuous: false
+      });
     }
   };
 
@@ -249,6 +355,11 @@ export default function TrainMode({ onBack }) {
     return `${base}${cleanPath}`;
   };
 
+  const filteredVideos = builtInVideos.filter(v => 
+    v.label.toLowerCase().includes(videoSearchQuery.toLowerCase()) ||
+    v.defaultName.toLowerCase().includes(videoSearchQuery.toLowerCase())
+  );
+
   if (isLoadingModel) {
     return (
       <div className="loading-container">
@@ -316,16 +427,57 @@ export default function TrainMode({ onBack }) {
               {sourceType === 'builtin' ? (
                 <>
                   <div className="form-group">
-                    <label>Choose built-in animal video</label>
-                    <select 
-                      value={selectedBuiltInPath} 
-                      onChange={(e) => setSelectedBuiltInPath(e.target.value)}
-                      className="toy-select"
-                    >
-                      {builtInVideos.map(v => (
-                        <option key={v.id} value={v.path}>{v.label}</option>
-                      ))}
-                    </select>
+                    <label>Select Video ({builtInVideos.length} Available)</label>
+                    
+                    {/* Search & Voice Filter Bar */}
+                    <div className="video-search-bar">
+                      <Search size={18} className="search-icon" />
+                      <input 
+                        type="text" 
+                        placeholder="Search animal video (e.g. Tiger, Duck)..." 
+                        value={videoSearchQuery}
+                        onChange={(e) => setVideoSearchQuery(e.target.value)}
+                        className="video-search-input"
+                      />
+                      {isSpeechSupported() && (
+                        <button 
+                          type="button" 
+                          className={`btn btn-mic-search ${isVoiceSearching ? 'listening pulse-anim' : ''}`}
+                          onClick={handleToggleVoiceSearch}
+                          title="Search by voice"
+                        >
+                          <Mic size={18} />
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Scrollable Visual Video Gallery */}
+                    <div className="video-picker-grid">
+                      {filteredVideos.map(v => {
+                        const isSelected = v.path === selectedBuiltInPath;
+                        return (
+                          <div 
+                            key={v.id} 
+                            className={`video-card-item ${isSelected ? 'selected' : ''}`}
+                            onClick={() => {
+                              setSelectedBuiltInPath(v.path);
+                              setToyName(v.defaultName);
+                            }}
+                          >
+                            <div className="video-card-thumbnail-wrapper">
+                              <video 
+                                src={getBuiltInPreviewUrl(v.path)} 
+                                preload="metadata" 
+                                muted 
+                                playsInline 
+                                className="video-card-thumbnail"
+                              />
+                            </div>
+                            <span className="video-card-label">{v.label}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   <div className="preview-container">
@@ -377,6 +529,12 @@ export default function TrainMode({ onBack }) {
           ) : (
             <div className="training-active-stack">
               <h3>Training: {toyName}</h3>
+
+              {autoDetectBadge && (
+                <div className="auto-detect-badge pulse-anim">
+                  {autoDetectBadge}
+                </div>
+              )}
               
               <div className="camera-view-wrapper">
                 <video ref={videoRef} autoPlay playsInline muted className="training-video-feed" />
@@ -385,26 +543,58 @@ export default function TrainMode({ onBack }) {
                 </button>
               </div>
 
+              {/* Training Method Selector */}
+              <div className="training-method-bar">
+                <button 
+                  type="button"
+                  className={`btn ${trainingMethod === 'video' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setTrainingMethod('video')}
+                >
+                  <Video size={16} /> Record Motion (Hold)
+                </button>
+                <button 
+                  type="button"
+                  className={`btn ${trainingMethod === 'photo' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setTrainingMethod('photo')}
+                >
+                  <Camera size={16} /> Single Photo (Auto-Augment)
+                </button>
+                <button 
+                  type="button"
+                  className="btn btn-secondary btn-auto-detect"
+                  onClick={handleAutoDetectAnimal}
+                  title="Auto-detect animal name & video"
+                >
+                  <Wand2 size={16} /> AI Auto-Detect
+                </button>
+              </div>
+
               <div className="training-controls">
-                <p className="instruction-text">
-                  Hold down the button below while rotating and moving the toy in front of the camera!
-                </p>
-                
                 <div className="progress-bar-container">
-                  <div className="progress-bar-fill" style={{ width: `${samplesCount}%` }}></div>
-                  <span className="progress-label">{samplesCount} / 100 Frames</span>
+                  <div className="progress-bar-fill" style={{ width: `${Math.min(samplesCount, 100)}%` }}></div>
+                  <span className="progress-label">{samplesCount} / {trainingMethod === 'photo' ? '25' : '100'} Frames</span>
                 </div>
 
-                <button 
-                  className={`btn btn-primary btn-record-hold ${isTraining ? 'recording pulse-anim' : ''}`}
-                  onMouseDown={startTrainingLoop}
-                  onMouseUp={stopTrainingLoop}
-                  onMouseLeave={stopTrainingLoop}
-                  onTouchStart={startTrainingLoop}
-                  onTouchEnd={stopTrainingLoop}
-                >
-                  <Camera size={24} /> {isTraining ? 'Recording...' : 'Press & Hold to Record'}
-                </button>
+                {trainingMethod === 'video' ? (
+                  <button 
+                    className={`btn btn-primary btn-record-hold ${isTraining ? 'recording pulse-anim' : ''}`}
+                    onMouseDown={startTrainingLoop}
+                    onMouseUp={stopTrainingLoop}
+                    onMouseLeave={stopTrainingLoop}
+                    onTouchStart={startTrainingLoop}
+                    onTouchEnd={stopTrainingLoop}
+                  >
+                    <Camera size={24} /> {isTraining ? 'Recording...' : 'Press & Hold to Record'}
+                  </button>
+                ) : (
+                  <button 
+                    className="btn btn-primary btn-record-hold"
+                    onClick={handleTrainFromSinglePhoto}
+                    disabled={isTraining}
+                  >
+                    <Camera size={24} /> {isTraining ? 'Processing Variations...' : 'Take Photo & Train'}
+                  </button>
+                )}
 
                 <div className="training-save-buttons">
                   <button className="btn btn-success" onClick={handleSaveToy} disabled={samplesCount < 10}>
@@ -426,11 +616,11 @@ export default function TrainMode({ onBack }) {
 
         {/* Existing Toys List */}
         <section className="card list-card">
-          <h2><Sparkles size={24} style={{ verticalAlign: 'middle', marginRight: '8px', color: 'var(--warning)' }} /> My Toys ({toys.length})</h2>
+          <h2><Sparkles size={24} style={{ verticalAlign: 'middle', marginRight: '8px', color: 'var(--warning)' }} /> My Custom Toys ({toys.length})</h2>
           
           {toys.length === 0 ? (
             <div className="empty-toys-state">
-              <p>No toys trained yet! Add one above to get started.</p>
+              <p>No custom toys trained yet. The app will automatically recognize standard animals out-of-the-box, or you can add a custom toy above!</p>
             </div>
           ) : (
             <div className="toys-grid">

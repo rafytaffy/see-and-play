@@ -118,14 +118,50 @@ export async function addExample(label, imageElement) {
   logits.dispose();
 }
 
+/**
+ * Zero-Shot MobileNet ImageNet Classification
+ */
+export async function classifyZeroShot(imageElement) {
+  const { mobilenetModel } = await initClassifier();
+  if (!mobilenetModel) return null;
+  try {
+    const predictions = await mobilenetModel.classify(imageElement);
+    return predictions;
+  } catch (e) {
+    console.error('Zero-shot classification error:', e);
+    return null;
+  }
+}
+
 export async function predict(imageElement) {
   const { mobilenetModel, classifier } = await initClassifier();
-  if (!mobilenetModel || !classifier || classifier.getNumClasses() === 0) return null;
+  if (!mobilenetModel || !classifier) return null;
 
-  const logits = mobilenetModel.infer(imageElement, true);
-  const result = await classifier.predictClass(logits);
-  logits.dispose();
-  return result;
+  // 1. Try KNN classifier predictions if any classes are trained
+  if (classifier.getNumClasses() > 0) {
+    const logits = mobilenetModel.infer(imageElement, true);
+    const result = await classifier.predictClass(logits);
+    logits.dispose();
+    return { type: 'knn', ...result };
+  }
+
+  // 2. Out-of-the-box Zero-Shot MobileNet classification fallback!
+  try {
+    const predictions = await mobilenetModel.classify(imageElement);
+    if (predictions && predictions.length > 0) {
+      const top = predictions[0];
+      return {
+        type: 'zeroshot',
+        label: top.className,
+        probability: top.probability,
+        rawPredictions: predictions
+      };
+    }
+  } catch (e) {
+    console.error('Zero-shot fallback error:', e);
+  }
+
+  return null;
 }
 
 export async function saveClassifier() {

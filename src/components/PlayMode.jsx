@@ -1,63 +1,70 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Settings, RotateCw, Sparkles, AlertCircle } from 'lucide-react';
-import { predict, initClassifier, getNumClasses } from '../utils/classifier';
+import React, { useEffect, useRef, useState } from 'react';
+import { Camera, Sparkles, Settings, RotateCw, Mic, MicOff, PlusCircle } from 'lucide-react';
+import { predict, getNumClasses } from '../utils/classifier';
 import { getAllToys } from '../utils/db';
+import { startVoiceListener, matchSpeechToVideo, isSpeechSupported } from '../utils/speech';
 
 export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }) {
-  const [facingMode, setFacingMode] = useState('environment'); // 'user' or 'environment'
-  const [isLoading, setIsLoading] = useState(true);
-  const [toysCount, setToysCount] = useState(0);
-  const [activeDetection, setActiveDetection] = useState(null);
-
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const requestRef = useRef(null);
   
-  // Stabilization ref values
+  const [facingMode, setFacingMode] = useState('environment'); // Default to back camera
+  const [activeDetection, setActiveDetection] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [toysCount, setToysCount] = useState(0);
+  const [catalog, setCatalog] = useState([]);
+  
+  // Voice & Prompt States
+  const [voiceActive, setVoiceActive] = useState(true);
+  const [heardToast, setHeardToast] = useState(null);
+  const [unrecognizedPrompt, setUnrecognizedPrompt] = useState(false);
+
   const consecutiveMatches = useRef(0);
   const lastPredictedLabel = useRef(null);
   const cooldownActive = useRef(false);
+  const unrecognizedTimerRef = useRef(null);
+  const voiceListenerRef = useRef(null);
 
-  // Initialize and load classifier / toys
   useEffect(() => {
-    const setup = async () => {
-      try {
-        await initClassifier();
-        const toys = await getAllToys();
-        setToysCount(toys.length);
-        setIsLoading(false);
-      } catch (err) {
-        console.error("Failed initializing play mode:", err);
-      }
-    };
-    setup();
+    loadData();
+    startCamera().then(() => setIsLoading(false));
 
     return () => {
       stopCamera();
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      if (unrecognizedTimerRef.current) clearTimeout(unrecognizedTimerRef.current);
+      if (voiceListenerRef.current) voiceListenerRef.current.stop();
     };
   }, []);
 
-  // Control camera startup
-  useEffect(() => {
-    if (!isLoading && toysCount > 0) {
-      startCamera();
-    } else {
-      stopCamera();
-    }
-  }, [isLoading, toysCount, facingMode]);
+  const loadData = async () => {
+    const toys = await getAllToys();
+    const count = getNumClasses();
+    setToysCount(count + toys.length);
 
-  // Restart predicting loop if camera/video is ready
+    // Fetch video catalog for zero-shot and voice matching
+    try {
+      const base = import.meta.env.BASE_URL || '/';
+      const res = await fetch(`${base}videos-list.json`);
+      if (res.ok) {
+        const list = await res.json();
+        setCatalog(list);
+      }
+    } catch (e) {
+      console.error("Failed to load catalog in PlayMode:", e);
+    }
+  };
+
   useEffect(() => {
-    if (videoRef.current && !isLoading && toysCount > 0) {
-      // Cooldown reset if a media overlay was closed
+    if (videoRef.current && !isLoading) {
       if (lastClosedToyId) {
         cooldownActive.current = true;
         setTimeout(() => {
           cooldownActive.current = false;
           consecutiveMatches.current = 0;
           lastPredictedLabel.current = null;
-        }, 2500); // 2.5s cooldown after user closes media overlay
+        }, 2500);
       }
       
       startPredicting();
@@ -65,7 +72,53 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
     return () => {
       if (requestRef.current) cancelAnimationFrame(requestRef.current);
     };
-  }, [videoRef.current, isLoading, toysCount, lastClosedToyId]);
+  }, [videoRef.current, isLoading, lastClosedToyId, catalog]);
+
+  // Voice listener initialization
+  useEffect(() => {
+    if (!voiceActive || !isSpeechSupported()) {
+      if (voiceListenerRef.current) voiceListenerRef.current.stop();
+      return;
+    }
+
+    voiceListenerRef.current = startVoiceListener({
+      onResult: async (transcript) => {
+        if (cooldownActive.current) return;
+
+        setHeardToast(`🎙️ Heard: "${transcript}"`);
+        setTimeout(() => setHeardToast(null), 3000);
+
+        // Match against local toys or video catalog
+        const toys = await getAllToys();
+        for (const toy of toys) {
+          if (transcript.includes(toy.name.toLowerCase())) {
+            onRecognized(toy.id);
+            cooldownActive.current = true;
+            return;
+          }
+        }
+
+        const matchedCatalogItem = matchSpeechToVideo(transcript, catalog);
+        if (matchedCatalogItem) {
+          // Play built-in video directly out-of-the-box!
+          onRecognized({
+            id: matchedCatalogItem.id,
+            name: matchedCatalogItem.defaultName,
+            mediaType: 'video',
+            isBuiltIn: true,
+            mediaUrl: matchedCatalogItem.path
+          });
+          cooldownActive.current = true;
+        }
+      },
+      onError: (err) => console.log("Voice listener error:", err),
+      continuous: true
+    });
+
+    return () => {
+      if (voiceListenerRef.current) voiceListenerRef.current.stop();
+    };
+  }, [voiceActive, catalog]);
 
   const startCamera = async () => {
     stopCamera();
@@ -78,11 +131,10 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
         videoRef.current.srcObject = stream;
         videoRef.current.setAttribute('playsinline', 'true');
         videoRef.current.muted = true;
-        videoRef.current.play().catch(e => console.error("Error playing standard camera feed:", e));
+        await videoRef.current.play();
       }
     } catch (err) {
-      console.error("Failed to start camera in PlayMode with preferred constraints:", err);
-      // Fallback to default camera constraints if environment/specific size fails
+      console.error("Camera access fallback:", err);
       try {
         const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true });
         streamRef.current = fallbackStream;
@@ -90,10 +142,10 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
           videoRef.current.srcObject = fallbackStream;
           videoRef.current.setAttribute('playsinline', 'true');
           videoRef.current.muted = true;
-          videoRef.current.play().catch(e => console.error("Error playing fallback camera feed:", e));
+          await videoRef.current.play();
         }
       } catch (e) {
-        console.error("Camera access failed completely:", e);
+        console.error("Camera failed completely:", e);
       }
     }
   };
@@ -120,13 +172,15 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
 
       try {
         const res = await predict(videoRef.current);
-        if (res && res.confidences) {
+
+        // LAYER 1: KNN Custom Trained Toy Match
+        if (res && res.type === 'knn' && res.confidences) {
           const confidences = res.confidences;
           const predictedLabel = res.label;
           const confidence = confidences[predictedLabel];
 
-          // 85% confidence threshold for toddler proofing
           if (confidence > 0.85) {
+            setUnrecognizedPrompt(false);
             if (predictedLabel === lastPredictedLabel.current) {
               consecutiveMatches.current += 1;
             } else {
@@ -134,10 +188,8 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
               consecutiveMatches.current = 1;
             }
 
-            // Show active detection name (e.g. pulsing outline)
             setActiveDetection(predictedLabel);
 
-            // Require 4 consecutive matches (about 400ms stabilization)
             if (consecutiveMatches.current >= 4) {
               onRecognized(predictedLabel);
               cooldownActive.current = true;
@@ -146,6 +198,36 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
           } else {
             consecutiveMatches.current = 0;
             lastPredictedLabel.current = null;
+            setActiveDetection(null);
+          }
+        } 
+        // LAYER 2: Out-of-the-Box Zero-Shot MobileNet Auto-Match
+        else if (res && res.type === 'zeroshot' && res.label && res.probability > 0.35) {
+          const matchedItem = matchSpeechToVideo(res.label, catalog);
+          if (matchedItem) {
+            setUnrecognizedPrompt(false);
+            if (matchedItem.id === lastPredictedLabel.current) {
+              consecutiveMatches.current += 1;
+            } else {
+              lastPredictedLabel.current = matchedItem.id;
+              consecutiveMatches.current = 1;
+            }
+
+            setActiveDetection(matchedItem.defaultName);
+
+            if (consecutiveMatches.current >= 4) {
+              onRecognized({
+                id: matchedItem.id,
+                name: matchedItem.defaultName,
+                mediaType: 'video',
+                isBuiltIn: true,
+                mediaUrl: matchedItem.path
+              });
+              cooldownActive.current = true;
+              setActiveDetection(null);
+            }
+          } else {
+            setUnrecognizedPrompt(true);
             setActiveDetection(null);
           }
         } else {
@@ -172,43 +254,59 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
 
   return (
     <div className="play-mode-container">
-      {toysCount === 0 ? (
-        <div className="no-toys-container card float-anim">
-          <AlertCircle size={64} style={{ color: 'var(--primary)' }} />
-          <h2>Welcome to See and Play!</h2>
-          <p>You don't have any toys set up yet. Pointing the camera won't recognize anything until you teach it a toy.</p>
-          <button className="btn btn-primary" onClick={onManageToys}>
-            <Settings size={20} /> Teach a Toy Now
-          </button>
-        </div>
-      ) : (
-        <div className="camera-fullscreen-container">
-          <video 
-            ref={videoRef} 
-            autoPlay 
-            playsInline 
-            muted 
-            className={`play-video-feed ${activeDetection ? 'detecting-highlight' : ''}`}
-          />
-          
-          {/* Toddler HUD Overlay */}
-          <div className="hud-overlay-top">
-            <button className="btn btn-secondary btn-icon-round" onClick={onManageToys}>
+      <div className="camera-fullscreen-container">
+        <video ref={videoRef} autoPlay playsInline muted className="play-video-feed" />
+
+        {/* HUD Controls */}
+        <div className="hud-overlay">
+          <div className="hud-top">
+            <button className="btn btn-secondary btn-icon-only glass-panel" onClick={onManageToys} title="Toy Manager">
               <Settings size={24} />
             </button>
-            <button className="btn btn-secondary btn-icon-round" onClick={toggleCamera}>
-              <RotateCw size={24} />
-            </button>
-          </div>
-
-          <div className="hud-overlay-bottom">
-            <div className="scanning-indicator pulse-anim">
-              <Sparkles size={24} style={{ color: 'var(--warning)', marginRight: '8px' }} />
-              <span>Show me a toy!</span>
+            <span className="app-title-badge">See & Play 🦄</span>
+            <div className="hud-right-actions">
+              {isSpeechSupported() && (
+                <button 
+                  className={`btn btn-icon-only glass-panel ${voiceActive ? 'active-voice pulse-anim' : ''}`} 
+                  onClick={() => setVoiceActive(!voiceActive)}
+                  title={voiceActive ? "Voice Activated" : "Voice Off"}
+                >
+                  {voiceActive ? <Mic size={24} style={{ color: 'var(--primary)' }} /> : <MicOff size={24} />}
+                </button>
+              )}
+              <button className="btn btn-secondary btn-icon-only glass-panel" onClick={toggleCamera} title="Switch Camera">
+                <RotateCw size={24} />
+              </button>
             </div>
           </div>
+
+          {/* Voice Heard Toast Notification */}
+          {heardToast && (
+            <div className="voice-toast-alert card float-anim">
+              {heardToast}
+            </div>
+          )}
+
+          {/* Active Recognition Indicator */}
+          {activeDetection && (
+            <div className="active-detection-toast pulse-anim">
+              <Sparkles size={24} />
+              <span>Recognized: {activeDetection}!</span>
+            </div>
+          )}
+
+          {/* Interactive Unrecognized Toy Prompt */}
+          {unrecognizedPrompt && !activeDetection && (
+            <div className="teach-me-banner card float-anim" onClick={onManageToys}>
+              <PlusCircle size={28} style={{ color: 'var(--primary)' }} />
+              <div>
+                <h4>Is this a new toy? 🧸</h4>
+                <p>Tap here to teach the app this toy!</p>
+              </div>
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
