@@ -28,7 +28,6 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
 
   useEffect(() => {
     loadData();
-    startCamera().then(() => setIsLoading(false));
 
     return () => {
       stopCamera();
@@ -37,6 +36,11 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
       if (voiceListenerRef.current) voiceListenerRef.current.stop();
     };
   }, []);
+
+  // Re-start camera whenever facingMode changes
+  useEffect(() => {
+    startCamera(facingMode).then(() => setIsLoading(false));
+  }, [facingMode]);
 
   const loadData = async () => {
     const toys = await getAllToys();
@@ -120,32 +124,52 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
     };
   }, [voiceActive, catalog]);
 
-  const startCamera = async () => {
+  const startCamera = async (mode) => {
     stopCamera();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facingMode, width: { ideal: 1280 }, height: { ideal: 720 } }
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.muted = true;
-        await videoRef.current.play();
-      }
-    } catch (err) {
-      console.error("Camera access fallback:", err);
+    const constraints = [
+      // Try ideal constraint first
+      { video: { facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 } } },
+      // Fallback: exact facingMode, lower res
+      { video: { facingMode: mode } },
+      // Final fallback: any camera
+      { video: true }
+    ];
+
+    let stream = null;
+    for (const constraint of constraints) {
       try {
-        const fallbackStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        streamRef.current = fallbackStream;
-        if (videoRef.current) {
-          videoRef.current.srcObject = fallbackStream;
-          videoRef.current.setAttribute('playsinline', 'true');
-          videoRef.current.muted = true;
-          await videoRef.current.play();
+        stream = await navigator.mediaDevices.getUserMedia(constraint);
+        break;
+      } catch (err) {
+        console.warn('Camera constraint failed, trying next:', constraint, err.message);
+      }
+    }
+
+    if (!stream) {
+      console.error('All camera constraints failed.');
+      return;
+    }
+
+    streamRef.current = stream;
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      // Wait for metadata to be loaded before playing (required on iOS Safari)
+      await new Promise((resolve) => {
+        const onLoaded = () => {
+          videoRef.current.removeEventListener('loadedmetadata', onLoaded);
+          resolve();
+        };
+        if (videoRef.current.readyState >= 1) {
+          resolve();
+        } else {
+          videoRef.current.addEventListener('loadedmetadata', onLoaded);
         }
+      });
+      try {
+        await videoRef.current.play();
       } catch (e) {
-        console.error("Camera failed completely:", e);
+        console.warn('video.play() error (may be a benign iOS autoplay block):', e.message);
       }
     }
   };
@@ -158,6 +182,7 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
   };
 
   const toggleCamera = () => {
+    setIsLoading(true);
     setFacingMode(prev => prev === 'user' ? 'environment' : 'user');
   };
 
@@ -255,7 +280,15 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
   return (
     <div className="play-mode-container">
       <div className="camera-fullscreen-container">
-        <video ref={videoRef} autoPlay playsInline muted className="play-video-feed" />
+        {/* iOS requires playsinline and muted as JSX props, NOT via setAttribute */}
+        <video
+          ref={videoRef}
+          autoPlay
+          playsInline
+          muted
+          className="play-video-feed"
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', background: '#000' }}
+        />
 
         {/* HUD Controls */}
         <div className="hud-overlay">

@@ -104,21 +104,47 @@ export default function TrainMode({ onBack }) {
 
   const startCamera = async () => {
     stopCamera();
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: facingMode, width: 640, height: 480 }
-      });
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-        videoRef.current.setAttribute('playsinline', 'true');
-        videoRef.current.muted = true;
-        videoRef.current.play().catch(err => console.error("Error playing video feed:", err));
+    const constraints = [
+      { video: { facingMode: { ideal: facingMode }, width: { ideal: 640 }, height: { ideal: 480 } } },
+      { video: { facingMode: facingMode } },
+      { video: true }
+    ];
+
+    let stream = null;
+    for (const constraint of constraints) {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia(constraint);
+        break;
+      } catch (err) {
+        console.warn('Camera constraint failed in TrainMode:', err.message);
       }
-    } catch (err) {
-      console.error("Error accessing camera:", err);
+    }
+
+    if (!stream) {
       alert("Could not access camera. Please check permissions.");
       setCameraActive(false);
+      return;
+    }
+
+    streamRef.current = stream;
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+      await new Promise((resolve) => {
+        const onLoaded = () => {
+          videoRef.current.removeEventListener('loadedmetadata', onLoaded);
+          resolve();
+        };
+        if (videoRef.current.readyState >= 1) {
+          resolve();
+        } else {
+          videoRef.current.addEventListener('loadedmetadata', onLoaded);
+        }
+      });
+      try {
+        await videoRef.current.play();
+      } catch (e) {
+        console.warn('video.play() error in TrainMode:', e.message);
+      }
     }
   };
 
