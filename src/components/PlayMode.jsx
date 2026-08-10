@@ -9,7 +9,7 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
   const streamRef = useRef(null);
   const requestRef = useRef(null);
   
-  const [facingMode, setFacingMode] = useState('environment'); // Default to back camera
+  const [facingMode, setFacingMode] = useState('user'); // Default to front camera
   const [activeDetection, setActiveDetection] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
   const [toysCount, setToysCount] = useState(0);
