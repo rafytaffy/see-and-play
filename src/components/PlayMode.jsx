@@ -268,15 +268,6 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
     requestRef.current = requestAnimationFrame(predictLoop);
   };
 
-  if (isLoading) {
-    return (
-      <div className="loading-container">
-        <Sparkles size={48} className="pulse-anim" style={{ color: 'var(--primary)' }} />
-        <h2>Setting up magic lens...</h2>
-      </div>
-    );
-  }
-
   return (
     <div className="play-mode-container">
       <div className="camera-fullscreen-container">
@@ -289,6 +280,14 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
           className="play-video-feed"
           style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', background: '#000' }}
         />
+
+        {/* Loading Overlay */}
+        {isLoading && (
+          <div className="loading-container" style={{ position: 'absolute', inset: 0, zIndex: 20, background: 'var(--bg-light)' }}>
+            <Sparkles size={48} className="pulse-anim" style={{ color: 'var(--primary)' }} />
+            <h2>Setting up magic lens...</h2>
+          </div>
+        )}
 
         {/* HUD Controls */}
         <div className="hud-overlay">
