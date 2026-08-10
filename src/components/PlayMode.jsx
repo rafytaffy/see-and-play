@@ -15,10 +15,12 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
   const [toysCount, setToysCount] = useState(0);
   const [catalog, setCatalog] = useState([]);
   
-  // Voice & Prompt States
+  // Voice, Error & Prompt States
   const [voiceActive, setVoiceActive] = useState(true);
   const [heardToast, setHeardToast] = useState(null);
   const [unrecognizedPrompt, setUnrecognizedPrompt] = useState(false);
+  const [cameraError, setCameraError] = useState(null);
+  const [needTapToPlay, setNeedTapToPlay] = useState(false);
 
   const consecutiveMatches = useRef(0);
   const lastPredictedLabel = useRef(null);
@@ -126,52 +128,84 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
 
   const startCamera = async (mode) => {
     stopCamera();
+    setCameraError(null);
+    setNeedTapToPlay(false);
+
     const constraints = [
-      // Try ideal constraint first
       { video: { facingMode: { ideal: mode }, width: { ideal: 1280 }, height: { ideal: 720 } } },
-      // Fallback: exact facingMode, lower res
       { video: { facingMode: mode } },
-      // Final fallback: any camera
       { video: true }
     ];
 
     let stream = null;
+    let lastErr = null;
     for (const constraint of constraints) {
       try {
         stream = await navigator.mediaDevices.getUserMedia(constraint);
         break;
       } catch (err) {
+        lastErr = err;
         console.warn('Camera constraint failed, trying next:', constraint, err.message);
       }
     }
 
     if (!stream) {
-      console.error('All camera constraints failed.');
+      const errMsg = lastErr ? lastErr.message || lastErr.name : 'Unknown camera error';
+      console.error('All camera constraints failed:', errMsg);
+      setCameraError(`Camera Error: ${errMsg}. Please grant camera permissions.`);
       return;
     }
 
     streamRef.current = stream;
 
     if (videoRef.current) {
-      videoRef.current.srcObject = stream;
-      // Wait for metadata to be loaded before playing (required on iOS Safari)
-      await new Promise((resolve) => {
-        const onLoaded = () => {
-          videoRef.current.removeEventListener('loadedmetadata', onLoaded);
-          resolve();
-        };
-        if (videoRef.current.readyState >= 1) {
-          resolve();
-        } else {
-          videoRef.current.addEventListener('loadedmetadata', onLoaded);
+      const v = videoRef.current;
+      v.srcObject = stream;
+      v.muted = true;
+      v.playsInline = true;
+      v.setAttribute('playsinline', 'true');
+      v.setAttribute('webkit-playsinline', 'true');
+      v.setAttribute('muted', 'true');
+
+      // Attempt immediate play
+      try {
+        await v.play();
+        setNeedTapToPlay(false);
+      } catch (e) {
+        console.warn('Initial video.play() was blocked or delayed:', e.message);
+        setNeedTapToPlay(true);
+      }
+
+      // Check if video actually playing after 600ms
+      setTimeout(() => {
+        if (v && (v.paused || v.ended || v.readyState < 2)) {
+          setNeedTapToPlay(true);
         }
-      });
+      }, 600);
+    }
+  };
+
+  const handleUserTapToPlay = async () => {
+    if (videoRef.current) {
       try {
         await videoRef.current.play();
-      } catch (e) {
-        console.warn('video.play() error (may be a benign iOS autoplay block):', e.message);
+        setNeedTapToPlay(false);
+      } catch (err) {
+        console.error("Tap to play failed:", err);
+      }
+    } else {
+      startCamera(facingMode);
+    }
+  };
+
+  const handleForceReload = async () => {
+    if ('serviceWorker' in navigator) {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      for (let reg of registrations) {
+        await reg.unregister();
       }
     }
+    window.location.reload(true);
   };
 
   const stopCamera = () => {
@@ -286,6 +320,54 @@ export default function PlayMode({ onManageToys, onRecognized, lastClosedToyId }
           <div className="loading-container" style={{ position: 'absolute', inset: 0, zIndex: 20, background: 'var(--bg-light)' }}>
             <Sparkles size={48} className="pulse-anim" style={{ color: 'var(--primary)' }} />
             <h2>Setting up magic lens...</h2>
+          </div>
+        )}
+
+        {/* Tap to Play Fallback Overlay for iOS Autoplay Block */}
+        {needTapToPlay && !isLoading && (
+          <div 
+            className="tap-to-play-overlay" 
+            onClick={handleUserTapToPlay}
+            style={{
+              position: 'absolute',
+              inset: 0,
+              zIndex: 30,
+              background: 'rgba(0,0,0,0.75)',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              color: 'white',
+              cursor: 'pointer'
+            }}
+          >
+            <Camera size={64} className="pulse-anim" style={{ color: 'var(--primary)', marginBottom: '16px' }} />
+            <h2 style={{ margin: '0 0 8px 0' }}>Tap Screen to Start Camera</h2>
+            <p style={{ margin: 0, opacity: 0.8 }}>iOS Safari requires a tap to activate video</p>
+          </div>
+        )}
+
+        {/* Camera Error Banner */}
+        {cameraError && (
+          <div 
+            className="camera-error-banner card" 
+            onClick={() => startCamera(facingMode)}
+            style={{
+              position: 'absolute',
+              top: '80px',
+              left: '50%',
+              transform: 'translateX(-50%)',
+              zIndex: 40,
+              background: '#ff4d4f',
+              color: 'white',
+              padding: '12px 24px',
+              borderRadius: '12px',
+              cursor: 'pointer',
+              fontWeight: 'bold',
+              textAlign: 'center'
+            }}
+          >
+            {cameraError} (Tap to Retry)
           </div>
         )}
 
