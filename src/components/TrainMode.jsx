@@ -24,7 +24,7 @@ export default function TrainMode({ onBack }) {
   // Creation States
   const [toyName, setToyName] = useState('Cow');
   const [sourceType, setSourceType] = useState('builtin'); // 'builtin' | 'upload'
-  const [trainingMethod, setTrainingMethod] = useState('video'); // 'video' | 'photo'
+  const [trainingMethod, setTrainingMethod] = useState('photo'); // 'video' | 'photo'
   const [selectedBuiltInPath, setSelectedBuiltInPath] = useState(DEFAULT_BUILT_IN_VIDEOS[0].path);
   const [videoSearchQuery, setVideoSearchQuery] = useState('');
   
@@ -35,6 +35,7 @@ export default function TrainMode({ onBack }) {
   const [currentToyId, setCurrentToyId] = useState(null);
   const [facingMode, setFacingMode] = useState('user'); // 'user' or 'environment'
   const [samplesCount, setSamplesCount] = useState(0);
+  const [capturedPhotos, setCapturedPhotos] = useState([]); // Multi-photo snapshot list
   const [isTraining, setIsTraining] = useState(false);
   const [cameraActive, setCameraActive] = useState(false);
   const [isLoadingModel, setIsLoadingModel] = useState(true);
@@ -177,6 +178,7 @@ export default function TrainMode({ onBack }) {
     }
     setCurrentToyId('toy_' + Date.now());
     setSamplesCount(0);
+    setCapturedPhotos([]);
     setCameraActive(true);
   };
 
@@ -243,12 +245,23 @@ export default function TrainMode({ onBack }) {
     }
   };
 
-  // Train via Single Photo (Generates 30 Augmented Canvas Variations)
-  const handleTrainFromSinglePhoto = async () => {
+  // Train via Multi-Photo Snapshots (Each Photo generates 25 Augmented Variations)
+  const handleSnapPhoto = async () => {
     if (!videoRef.current || !currentToyId) return;
     setIsTraining(true);
 
     try {
+      // 1. Capture current photo snapshot frame
+      const snapCanvas = document.createElement('canvas');
+      snapCanvas.width = 224;
+      snapCanvas.height = 224;
+      const snapCtx = snapCanvas.getContext('2d');
+      snapCtx.drawImage(videoRef.current, 0, 0, 224, 224);
+
+      const dataUrl = snapCanvas.toDataURL('image/png');
+      setCapturedPhotos(prev => [...prev, dataUrl]);
+
+      // 2. Generate 25 augmented variations for this specific photo angle
       const canvas = document.createElement('canvas');
       const ctx = canvas.getContext('2d');
       canvas.width = 224;
@@ -289,14 +302,14 @@ export default function TrainMode({ onBack }) {
         ctx.translate(112 + aug.tx, 112 + aug.ty);
         ctx.rotate((aug.rotate * Math.PI) / 180);
         ctx.scale(aug.scale, aug.scale);
-        ctx.drawImage(videoRef.current, -112, -112, 224, 224);
+        ctx.drawImage(snapCanvas, -112, -112, 224, 224);
         ctx.restore();
 
         await addExample(currentToyId, canvas);
-        setSamplesCount(i + 1);
+        setSamplesCount(prev => prev + 1);
       }
     } catch (err) {
-      console.error("Single photo training error:", err);
+      console.error("Multi-photo snap training error:", err);
     } finally {
       setIsTraining(false);
     }
@@ -390,7 +403,7 @@ export default function TrainMode({ onBack }) {
 
   const handleSaveToy = async () => {
     if (samplesCount < 10) {
-      alert("Please capture at least 10 training frames so the app can recognize the toy!");
+      alert("Please capture at least 1 photo angle or 10 training frames so the app can recognize the toy!");
       return;
     }
 
@@ -430,6 +443,7 @@ export default function TrainMode({ onBack }) {
       setMediaPreview(null);
       setCurrentToyId(null);
       setSamplesCount(0);
+      setCapturedPhotos([]);
       setCameraActive(false);
       stopCamera();
 
@@ -647,17 +661,17 @@ export default function TrainMode({ onBack }) {
               <div className="training-method-bar">
                 <button 
                   type="button"
+                  className={`btn ${trainingMethod === 'photo' ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => setTrainingMethod('photo')}
+                >
+                  <Camera size={16} /> Photos / Angles (Snap Multi)
+                </button>
+                <button 
+                  type="button"
                   className={`btn ${trainingMethod === 'video' ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => setTrainingMethod('video')}
                 >
                   <Video size={16} /> Record Motion (Hold)
-                </button>
-                <button 
-                  type="button"
-                  className={`btn ${trainingMethod === 'photo' ? 'btn-primary' : 'btn-secondary'}`}
-                  onClick={() => setTrainingMethod('photo')}
-                >
-                  <Camera size={16} /> Single Photo (Auto-Augment)
                 </button>
                 <button 
                   type="button"
@@ -669,13 +683,35 @@ export default function TrainMode({ onBack }) {
                 </button>
               </div>
 
+              {/* Snapped Photos Gallery Preview */}
+              {capturedPhotos.length > 0 && (
+                <div className="photo-gallery-preview" style={{ display: 'flex', gap: '8px', overflowX: 'auto', padding: '8px 0' }}>
+                  {capturedPhotos.map((src, idx) => (
+                    <div key={idx} style={{ position: 'relative', width: '60px', height: '60px', borderRadius: '8px', overflow: 'hidden', border: '2px solid var(--primary)', flexShrink: 0 }}>
+                      <img src={src} alt={`Angle ${idx + 1}`} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                      <span style={{ position: 'absolute', bottom: 2, right: 4, background: 'rgba(0,0,0,0.7)', color: 'white', fontSize: '10px', padding: '1px 4px', borderRadius: '4px' }}>
+                        #{idx + 1}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
               <div className="training-controls">
                 <div className="progress-bar-container">
                   <div className="progress-bar-fill" style={{ width: `${Math.min(samplesCount, 100)}%` }}></div>
-                  <span className="progress-label">{samplesCount} / {trainingMethod === 'photo' ? '25' : '100'} Frames</span>
+                  <span className="progress-label">{samplesCount} AI Training Frames ({capturedPhotos.length} Photo Angles)</span>
                 </div>
 
-                {trainingMethod === 'video' ? (
+                {trainingMethod === 'photo' ? (
+                  <button 
+                    className="btn btn-primary btn-record-hold"
+                    onClick={handleSnapPhoto}
+                    disabled={isTraining}
+                  >
+                    <Camera size={24} /> {isTraining ? 'Augmenting Image...' : `📸 Snap Photo Angle (${capturedPhotos.length} Taken)`}
+                  </button>
+                ) : (
                   <button 
                     className={`btn btn-primary btn-record-hold ${isTraining ? 'recording pulse-anim' : ''}`}
                     onMouseDown={startTrainingLoop}
@@ -686,14 +722,6 @@ export default function TrainMode({ onBack }) {
                   >
                     <Camera size={24} /> {isTraining ? 'Recording...' : 'Press & Hold to Record'}
                   </button>
-                ) : (
-                  <button 
-                    className="btn btn-primary btn-record-hold"
-                    onClick={handleTrainFromSinglePhoto}
-                    disabled={isTraining}
-                  >
-                    <Camera size={24} /> {isTraining ? 'Processing Variations...' : 'Take Photo & Train'}
-                  </button>
                 )}
 
                 <div className="training-save-buttons">
@@ -703,6 +731,7 @@ export default function TrainMode({ onBack }) {
                   <button className="btn btn-danger" onClick={() => {
                     setCurrentToyId(null);
                     setSamplesCount(0);
+                    setCapturedPhotos([]);
                     setCameraActive(false);
                     stopCamera();
                   }}>
