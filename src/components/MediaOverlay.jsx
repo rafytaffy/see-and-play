@@ -28,6 +28,19 @@ export default function MediaOverlay({ toy, onClose }) {
     };
   }, [toy]);
 
+  // Auto-close video/media after 2 seconds of playback and reset camera recognition
+  useEffect(() => {
+    if (!mediaUrl) return;
+
+    const autoCloseTimer = setTimeout(() => {
+      onClose();
+    }, 2000);
+
+    return () => {
+      clearTimeout(autoCloseTimer);
+    };
+  }, [mediaUrl, onClose]);
+
   if (!toy || !mediaUrl) return null;
 
   return (
