@@ -842,3 +842,47 @@ h1, h2, h3, h4 {
   color: var(--text-muted);
 }
 
+/* Offline Video & Device Sync Cards */
+.sync-section-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.sync-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sync-block h4 {
+  margin: 0;
+  font-size: 1.05rem;
+  color: var(--dark);
+}
+
+.sync-help-text {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.sync-actions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.btn-full-width {
+  width: 100%;
+  justify-content: center;
+}
+
+.divider-line {
+  border: none;
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+  margin: 4px 0;
+}
+
+

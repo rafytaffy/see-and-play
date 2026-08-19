@@ -1,24 +1,31 @@
 import React, { useEffect, useState } from 'react';
 import { X } from 'lucide-react';
+import { getCachedVideoUrl } from '../utils/videoCache';
 
 export default function MediaOverlay({ toy, onClose }) {
   const [mediaUrl, setMediaUrl] = useState(null);
 
   useEffect(() => {
+    let isMounted = true;
     if (!toy) return;
     
     if (toy.isBuiltIn && toy.mediaUrl) {
-      const base = import.meta.env.BASE_URL || '/';
-      const cleanPath = toy.mediaUrl.startsWith('/') ? toy.mediaUrl.slice(1) : toy.mediaUrl;
-      setMediaUrl(`${base}${cleanPath}`);
+      getCachedVideoUrl(toy.mediaUrl).then((url) => {
+        if (isMounted) setMediaUrl(url);
+      });
     } else if (toy.mediaBlob) {
       const url = URL.createObjectURL(toy.mediaBlob);
       setMediaUrl(url);
 
       return () => {
+        isMounted = false;
         URL.revokeObjectURL(url);
       };
     }
+
+    return () => {
+      isMounted = false;
+    };
   }, [toy]);
 
   if (!toy || !mediaUrl) return null;

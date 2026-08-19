@@ -1,8 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, Trash2, Plus, RotateCw, ArrowLeft, Image, Video, Sparkles, CheckCircle, Search, Mic, Wand2 } from 'lucide-react';
-import { saveToy, getAllToys, deleteToy, syncToysWithViteServer } from '../utils/db';
-import { addExample, saveClassifier, clearClass, initClassifier, classifyZeroShot } from '../utils/classifier';
+import { Camera, Trash2, Plus, RotateCw, ArrowLeft, Image, Video, Sparkles, CheckCircle, Search, Mic, Wand2, Download, Upload, HardDrive, RefreshCw, Smartphone } from 'lucide-react';
+import { saveToy, getAllToys, deleteToy, syncToysWithViteServer, exportToysPack, importToysPack } from '../utils/db';
+import { addExample, saveClassifier, clearClass, initClassifier, classifyZeroShot, reloadClassifierDataset } from '../utils/classifier';
 import { startVoiceListener, matchSpeechToVideo, isSpeechSupported } from '../utils/speech';
+import { preDownloadAllVideos, getCacheStats, getCachedVideoUrl } from '../utils/videoCache';
 
 const DEFAULT_BUILT_IN_VIDEOS = [
   { id: 'cow', label: 'Cow 🐄', path: 'videos/cow.mp4', defaultName: 'Cow' },
@@ -40,6 +41,12 @@ export default function TrainMode({ onBack }) {
   const [autoDetectBadge, setAutoDetectBadge] = useState(null);
   const [isVoiceSearching, setIsVoiceSearching] = useState(false);
 
+  // Video Caching & Multi-Device Sync States
+  const [cacheStats, setCacheStats] = useState({ count: 0, total: 0, isComplete: false });
+  const [isCachingVideos, setIsCachingVideos] = useState(false);
+  const [cachingProgress, setCachingProgress] = useState({ current: 0, total: 0 });
+  const [isSyncingPC, setIsSyncingPC] = useState(false);
+
   const videoRef = useRef(null);
   const streamRef = useRef(null);
   const trainingIntervalRef = useRef(null);
@@ -59,6 +66,10 @@ export default function TrainMode({ onBack }) {
             setBuiltInVideos(catalog);
             setSelectedBuiltInPath(catalog[0].path);
             setToyName(catalog[0].defaultName);
+
+            // Check cache stats for catalog
+            const stats = await getCacheStats(catalog);
+            setCacheStats(stats);
           }
         }
       } catch (err) {
@@ -311,6 +322,69 @@ export default function TrainMode({ onBack }) {
         onEnd: () => setIsVoiceSearching(false),
         continuous: false
       });
+    }
+  };
+
+  // Pre-download all videos for weak connections / offline play
+  const handlePreDownloadVideos = async () => {
+    setIsCachingVideos(true);
+    setCachingProgress({ current: 0, total: builtInVideos.length });
+
+    try {
+      await preDownloadAllVideos(builtInVideos, (curr, tot) => {
+        setCachingProgress({ current: curr, total: tot });
+      });
+      const stats = await getCacheStats(builtInVideos);
+      setCacheStats(stats);
+      alert(`Success! ${stats.count} videos stored locally for offline play!`);
+    } catch (err) {
+      console.error("Caching error:", err);
+      alert("Failed to pre-download videos. Please check connection.");
+    } finally {
+      setIsCachingVideos(false);
+    }
+  };
+
+  // Export AI toys pack file
+  const handleExportPack = async () => {
+    try {
+      await exportToysPack();
+    } catch (err) {
+      console.error("Export pack error:", err);
+      alert("Failed to export pack file.");
+    }
+  };
+
+  // Import AI toys pack file
+  const handleImportPackFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    try {
+      const text = await file.text();
+      const payload = JSON.parse(text);
+      const importedCount = await importToysPack(payload);
+      await reloadClassifierDataset();
+      await loadToys();
+      alert(`Successfully imported ${importedCount} toys & AI training dataset!`);
+    } catch (err) {
+      console.error("Import error:", err);
+      alert("Failed to import toys pack file. Please make sure it's a valid see-and-play JSON file.");
+    }
+    e.target.value = '';
+  };
+
+  // Sync to PC Server / Cloud
+  const handleSyncToPC = async () => {
+    setIsSyncingPC(true);
+    try {
+      await syncToysWithViteServer();
+      alert("Toys & AI training synced successfully! Deploying to all devices...");
+    } catch (err) {
+      console.error("Sync to PC failed:", err);
+      alert(`Sync failed: ${err.message}. Make sure you are connected to the home local server!`);
+    } finally {
+      setIsSyncingPC(false);
     }
   };
 
@@ -638,6 +712,58 @@ export default function TrainMode({ onBack }) {
               </div>
             </div>
           )}
+        </section>
+
+        {/* Multi-Device Sync & Offline Video Download Tools */}
+        <section className="card sync-card">
+          <h2><HardDrive size={24} style={{ verticalAlign: 'middle', marginRight: '8px', color: 'var(--primary)' }} /> Offline Videos & Device Sync</h2>
+          
+          <div className="sync-section-stack">
+            {/* Offline Videos Manager */}
+            <div className="sync-block">
+              <h4>⚡ Offline Video Cache ({cacheStats.count} / {cacheStats.total} Saved)</h4>
+              <p className="sync-help-text">Store all 94 animal videos directly on this device so they play instantly even on weak internet!</p>
+              
+              {isCachingVideos ? (
+                <div className="progress-bar-container">
+                  <div className="progress-bar-fill" style={{ width: `${(cachingProgress.current / cachingProgress.total) * 100}%` }}></div>
+                  <span className="progress-label">Caching Videos: {cachingProgress.current} / {cachingProgress.total}</span>
+                </div>
+              ) : (
+                <button className="btn btn-secondary btn-full-width" onClick={handlePreDownloadVideos}>
+                  <Download size={18} /> {cacheStats.isComplete ? 'Re-Download / Update Local Videos' : 'Pre-Download All Videos for Offline Play'}
+                </button>
+              )}
+            </div>
+
+            <hr className="divider-line" />
+
+            {/* Cross-Device AI Toys Sync */}
+            <div className="sync-block">
+              <h4>📱 Sync AI Toys Across Devices</h4>
+              <p className="sync-help-text">Share trained toys and AI learning vectors across your Phone, iPad, and Computer.</p>
+              
+              <div className="sync-actions-grid">
+                <button className="btn btn-secondary" onClick={handleExportPack}>
+                  <Download size={18} /> Export Toys Pack (.json)
+                </button>
+
+                <label className="btn btn-secondary btn-file-label">
+                  <Upload size={18} /> Import Toys Pack
+                  <input 
+                    type="file" 
+                    accept=".json,application/json" 
+                    onChange={handleImportPackFile}
+                    style={{ display: 'none' }}
+                  />
+                </label>
+              </div>
+
+              <button className="btn btn-primary btn-full-width" onClick={handleSyncToPC} disabled={isSyncingPC} style={{ marginTop: '10px' }}>
+                <Smartphone size={18} /> {isSyncingPC ? 'Syncing to Cloud/PC...' : 'Sync AI Toys to Home PC & Cloud'}
+              </button>
+            </div>
+          </div>
         </section>
 
         {/* Existing Toys List */}

@@ -195,3 +195,15 @@ export function getNumClasses() {
   if (!classifier) return 0;
   return classifier.getNumClasses();
 }
+
+export async function reloadClassifierDataset() {
+  const { classifier } = await initClassifier();
+  if (!classifier) return;
+  const savedDatasetJson = await getClassifierDataset();
+  if (savedDatasetJson) {
+    const dataset = datasetFromJSON(savedDatasetJson);
+    if (dataset) {
+      classifier.setClassifierDataset(dataset);
+    }
+  }
+}
